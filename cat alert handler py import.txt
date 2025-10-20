@@ -1,0 +1,215 @@
+┌──(env)─(def4ult㉿kali)-[~]
+└─$ sudo nano alert_handler.py     
+[sudo] password for def4ult: 
+                                                                                                                              
+┌──(env)─(def4ult㉿kali)-[~]
+└─$ cat alert_handler.py
+import pika
+import requests
+import json
+import mysql.connector
+from datetime import datetime
+import time
+import warnings
+from urllib3.exceptions import InsecureRequestWarning
+
+# Suppress SSL warnings
+warnings.filterwarnings('ignore', category=InsecureRequestWarning)
+
+# Configuration
+RABBITMQ_HOST = "192.168.1.169"
+RABBITMQ_USER = "admin"
+RABBITMQ_PASSWORD = "admin"
+QUEUE_NAME = "security_alerts"
+PUSHOVER_USER = "ubgyefoah576axintozbu33nm9dh22"
+PUSHOVER_TOKEN = "aa46811afwn3wezn1vb4mpfaw9kiis"
+INFINITYFREE_URL = "http://kisanjara1.42web.io/receive_reading.php"
+
+# Save to local MySQL (phpMyAdmin) database
+def save_to_local_db(temperature, status, timestamp):
+    try:
+        conn = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="",  # use your actual root password if set
+            database="rabbitmq_readings"
+        )
+        cursor = conn.cursor()
+
+        # Create table if not exists
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS temperature_logs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                temperature FLOAT,
+                status VARCHAR(20),
+                timestamp DATETIME
+            )
+        """)
+
+        # Insert data
+        cursor.execute(
+            "INSERT INTO temperature_logs (temperature, status, timestamp) VALUES (%s, %s, %s)",
+            (temperature, status, timestamp)
+        )
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print(f"[{datetime.now()}] Saved to local DB: {temperature}°C, {status}, {timestamp}")
+    except Exception as e:
+        print(f"[{datetime.now()}] Local DB error: {str(e)}")
+
+# Send alert to Pushover
+def send_pushover_alert(message):
+    try:
+        response = requests.post(
+            "https://api.pushover.net/1/messages.json",
+            data={
+                "token": PUSHOVER_TOKEN,
+                "user": PUSHOVER_USER,
+                "message": message,
+                "title": "Temperature Alert",
+                "sound": "siren"
+            },
+            timeout=5
+        )
+        if response.json().get('status') == 1:
+            print(f"[{datetime.now()}] Pushover alert sent")
+        else:
+            print(f"[{datetime.now()}] Pushover error: {response.json()}")
+    except Exception as e:
+        print(f"[{datetime.now()}] Pushover failed: {str(e)}")
+
+# Send data to InfinityFree server
+def send_to_infinityfree(temperature, status, timestamp):
+    payload = {
+        'temperature': temperature,
+        'status': status,
+        'timestamp': timestamp
+    }
+    headers = {
+        'User-Agent': 'TemperatureMonitor/1.0',
+        'Accept': '*/*',
+        'Connection': 'keep-alive'
+    }
+
+    try:
+        response = requests.post(
+            INFINITYFREE_URL,
+            data=payload,
+            headers=headers,
+            timeout=5
+        )
+
+        if "aes.js" in response.text:
+            print(f"[{datetime.now()}] Handling JavaScript challenge...")
+            if "location.href=" in response.text:
+                redirect_url = response.text.split("location.href=")[1].split('"')[1]
+                if not redirect_url.startswith('http'):
+                    redirect_url = f"http://kisanjara1.42web.io{redirect_url}"
+
+                try:
+                    response = requests.post(
+                        redirect_url,
+                        data=payload,
+                        headers=headers,
+                        timeout=15
+                    )
+                    if response.status_code == 200:
+                        print(f"[{datetime.now()}] Data sent after JS challenge")
+                        return True
+                except requests.exceptions.ReadTimeout:
+                    print(f"[{datetime.now()}] Challenge redirect timed out")
+                    return False
+
+        if response.status_code == 200:
+            print(f"[{datetime.now()}] Data sent successfully")
+            return True
+
+    except requests.exceptions.ReadTimeout:
+        print(f"[{datetime.now()}] Timeout - Server overload?")
+        return False
+    except Exception as e:
+        print(f"[{datetime.now()}] Error: {str(e)}")
+        return False
+
+    print(f"[{datetime.now()}] Failed with status code: {response.status_code}")
+    return False
+
+# Process each RabbitMQ message
+def process_message(body):
+    try:
+        message = json.loads(body)
+        temperature = float(message.get("temperature", 0))
+        timestamp = message.get("timestamp", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+        print(f"[{datetime.now()}] Processing: {temperature}°C at {timestamp}")
+
+        if temperature > 45:
+            status = "CRITICAL"
+            alert_message = f"🔥 CRITICAL: {temperature}°C at {timestamp}"
+        elif temperature > 40:
+            status = "WARNING"
+            alert_message = f"⚠️ WARNING: {temperature}°C at {timestamp}"
+        else:
+            status = "NORMAL"
+            alert_message = None
+
+        # 1. Save to local database
+        save_to_local_db(temperature, status, timestamp)
+
+        # 2. Send to remote InfinityFree
+        try:
+            send_to_infinityfree(temperature, status, timestamp)
+        except Exception as e:
+            print(f"[{datetime.now()}] Non-critical InfinityFree error: {str(e)}")
+
+        return alert_message
+
+    except Exception as e:
+        print(f"[{datetime.now()}] Message processing error: {str(e)}")
+        return None
+
+# Start the RabbitMQ consumer
+def start_consumer():
+    print("🌡️ Starting Enhanced Temperature Monitoring")
+    print(f"🔔 Pushover User: {PUSHOVER_USER}")
+    print(f"🌐 InfinityFree URL: {INFINITYFREE_URL}")
+
+    while True:
+        try:
+            credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
+            connection = pika.BlockingConnection(
+                pika.ConnectionParameters(
+                    host=RABBITMQ_HOST,
+                    credentials=credentials,
+                    heartbeat=30,
+                    connection_attempts=3,
+                    retry_delay=5
+                )
+            )
+            channel = connection.channel()
+            channel.queue_declare(queue=QUEUE_NAME, durable=True)
+
+            def callback(ch, method, properties, body):
+                alert = process_message(body)
+                if alert:
+                    send_pushover_alert(alert)
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+
+            channel.basic_consume(queue=QUEUE_NAME, on_message_callback=callback)
+            print(f"[{datetime.now()}] ✅ Waiting for messages...")
+            channel.start_consuming()
+
+        except KeyboardInterrupt:
+            print(f"\n[{datetime.now()}] ❌ Shutting down...")
+            break
+        except pika.exceptions.AMQPConnectionError:
+            print(f"[{datetime.now()}] 💤 RabbitMQ connection failed. Retrying...")
+            time.sleep(5)
+        except Exception as e:
+            print(f"[{datetime.now()}] 🛑 System error: {str(e)}")
+            time.sleep(5)
+
+if __name__ == "__main__":
+    start_consumer()

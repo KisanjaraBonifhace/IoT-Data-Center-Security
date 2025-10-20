@@ -1,0 +1,159 @@
+import pika
+import random
+import time
+from datetime import datetime
+import json
+
+# RabbitMQ Configuration
+RABBITMQ_HOST = "192.168.1.169"
+RABBITMQ_USER = "admin"
+RABBITMQ_PASSWORD = "admin"
+QUEUE_NAME = "security_alerts"
+
+def read_temperature():
+    # Simulate temperature between 35°C and 50°C with some fluctuation
+    base_temp = 38.0
+    fluctuation = random.uniform(-2, 5)
+    return round(base_temp + fluctuation, 2)
+
+def send_to_rabbitmq(channel, temperature):
+    try:
+        message = {
+            "temperature": temperature,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # Ensure the message is properly formatted JSON
+        json_message = json.dumps(message, ensure_ascii=False)
+        
+        channel.basic_publish(
+            exchange='',
+            routing_key=QUEUE_NAME,
+            body=json_message,
+            properties=pika.BasicProperties(
+                delivery_mode=2,  # make message persistent
+                content_type='application/json'
+            )
+        )
+        
+        print(f"[{datetime.now()}] Sent: {json_message}")
+        
+    except Exception as e:
+        print(f"[{datetime.now()}] RabbitMQ Error: {e}")
+
+def main():
+    # Establish connection and channel outside of the loop to reuse
+    try:
+        credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
+        connection = pika.BlockingConnection(
+            pika.ConnectionParameters(
+                host=RABBITMQ_HOST,
+                credentials=credentials,
+                heartbeat=600,
+                blocked_connection_timeout=300
+            )
+        )
+        channel = connection.channel()
+        channel.queue_declare(queue=QUEUE_NAME, durable=True)
+
+        while True:
+            try:
+                temperature = read_temperature()
+                send_to_rabbitmq(channel, temperature)
+                time.sleep(5)  # Send every 5 seconds
+                
+            except KeyboardInterrupt:
+                print(f"[{datetime.now()}] Stopped by user.")
+                break
+            except Exception as e:
+                print(f"[{datetime.now()}] Error: {e}")
+                time.sleep(5)
+    
+    except Exception as e:
+        print(f"[{datetime.now()}] Error connecting to RabbitMQ: {e}")
+
+    finally:
+        if 'connection' in locals() and connection.is_open:
+            connection.close()
+
+if __name__ == "__main__":
+    main()import pika
+import random
+import time
+from datetime import datetime
+import json
+
+# RabbitMQ Configuration
+RABBITMQ_HOST = "192.168.1.169"
+RABBITMQ_USER = "admin"
+RABBITMQ_PASSWORD = "admin"
+QUEUE_NAME = "security_alerts"
+
+def read_temperature():
+    # Simulate temperature between 35°C and 50°C with some fluctuation
+    base_temp = 38.0
+    fluctuation = random.uniform(-2, 5)
+    return round(base_temp + fluctuation, 2)
+
+def send_to_rabbitmq(channel, temperature):
+    try:
+        message = {
+            "temperature": temperature,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        # Ensure the message is properly formatted JSON
+        json_message = json.dumps(message, ensure_ascii=False)
+        
+        channel.basic_publish(
+            exchange='',
+            routing_key=QUEUE_NAME,
+            body=json_message,
+            properties=pika.BasicProperties(
+                delivery_mode=2,  # make message persistent
+                content_type='application/json'
+            )
+        )
+        
+        print(f"[{datetime.now()}] Sent: {json_message}")
+        
+    except Exception as e:
+        print(f"[{datetime.now()}] RabbitMQ Error: {e}")
+
+def main():
+    # Establish connection and channel outside of the loop to reuse
+    try:
+        credentials = pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASSWORD)
+        connection = pika.BlockingConnection(
+            pika.ConnectionParameters(
+                host=RABBITMQ_HOST,
+                credentials=credentials,
+                heartbeat=600,
+                blocked_connection_timeout=300
+            )
+        )
+        channel = connection.channel()
+        channel.queue_declare(queue=QUEUE_NAME, durable=True)
+
+        while True:
+            try:
+                temperature = read_temperature()
+                send_to_rabbitmq(channel, temperature)
+                time.sleep(5)  # Send every 5 seconds
+                
+            except KeyboardInterrupt:
+                print(f"[{datetime.now()}] Stopped by user.")
+                break
+            except Exception as e:
+                print(f"[{datetime.now()}] Error: {e}")
+                time.sleep(5)
+    
+    except Exception as e:
+        print(f"[{datetime.now()}] Error connecting to RabbitMQ: {e}")
+
+    finally:
+        if 'connection' in locals() and connection.is_open:
+            connection.close()
+
+if __name__ == "__main__":
+    main()
