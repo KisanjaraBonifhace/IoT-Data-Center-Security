@@ -1,9 +1,4 @@
-┌──(env)─(def4ult㉿kali)-[~]
-└─$ sudo nano alert_handler.py     
-[sudo] password for def4ult: 
-                                                                                                                              
-┌──(env)─(def4ult㉿kali)-[~]
-└─$ cat alert_handler.py
+
 import pika
 import requests
 import json
